@@ -1,0 +1,112 @@
+{
+  "domaines": [
+    {
+      "id": "reseau",
+      "nom": "Réseau",
+      "description": "Problèmes de connectivité, WiFi, internet",
+      "mots_cles": ["internet", "wifi", "connexion", "réseau", "connecter", "déconnecté"],
+      "sous_domaines": [
+        {
+          "id": "wifi",
+          "nom": "WiFi",
+          "description": "Problèmes liés au réseau sans fil",
+          "mots_cles": ["wifi", "sans fil", "borne", "box"],
+          "contexte_1": {
+            "question": "Le problème affecte-t-il tous vos appareils ou un seul appareil en particulier ?",
+            "options": ["Tous les appareils", "Un seul appareil", "Plusieurs appareils mais pas tous"]
+          },
+          "contexte_2": {
+            "question": "Depuis quand observez-vous ce problème ?",
+            "options": ["Depuis aujourd'hui", "Depuis quelques jours", "Depuis une mise à jour", "Toujours eu ce problème"]
+          }
+        },
+        {
+          "id": "connexion_filaire",
+          "nom": "Connexion filaire",
+          "description": "Problèmes liés au câble ethernet",
+          "mots_cles": ["câble", "ethernet", "filaire", "rj45"],
+          "contexte_1": {
+            "question": "Le câble ethernet est-il correctement branché des deux côtés ?",
+            "options": ["Oui, les deux côtés", "Je ne suis pas sûr", "Un côté semble mal branché"]
+          },
+          "contexte_2": {
+            "question": "Les voyants de la prise réseau sont-ils allumés ?",
+            "options": ["Oui, voyants verts", "Voyants oranges/rouges", "Aucun voyant", "Je ne vois pas de voyants"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "materiel",
+      "nom": "Matériel",
+      "description": "Pannes physiques, écran, clavier, alimentation",
+      "mots_cles": ["écran", "clavier", "souris", "batterie", "alimentation", "chargeur", "allumer"],
+      "sous_domaines": [
+        {
+          "id": "ecran",
+          "nom": "Écran",
+          "description": "Problèmes d'affichage",
+          "mots_cles": ["écran", "affichage", "noir", "blanc", "image", "résolution"],
+          "contexte_1": {
+            "question": "L'écran est-il complètement noir ou affiche-t-il quelque chose (même flou) ?",
+            "options": ["Complètement noir", "Image présente mais floue", "Image présente mais avec des artefacts", "Écran qui clignote"]
+          },
+          "contexte_2": {
+            "question": "Le problème est-il apparu suite à un choc ou une chute ?",
+            "options": ["Oui, suite à un choc", "Non, sans raison apparente", "Après une mise à jour", "Après un redémarrage"]
+          }
+        },
+        {
+          "id": "alimentation",
+          "nom": "Alimentation / Batterie",
+          "description": "Problèmes de mise sous tension ou de batterie",
+          "mots_cles": ["s'allume pas", "démarrer", "batterie", "chargeur", "éteint"],
+          "contexte_1": {
+            "question": "L'appareil est-il complètement inerte ou y a-t-il des signes de vie (voyants, sons) ?",
+            "options": ["Complètement inerte", "Voyant d'alimentation clignote", "Bip au démarrage", "Démarre puis s'éteint"]
+          },
+          "contexte_2": {
+            "question": "Avez-vous essayé avec un autre chargeur ou une autre prise électrique ?",
+            "options": ["Oui, même résultat", "Non, pas encore essayé", "Pas d'autre chargeur disponible"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "logiciel",
+      "nom": "Logiciel / Application",
+      "description": "Bugs applicatifs, crashes, erreurs",
+      "mots_cles": ["application", "logiciel", "plante", "crash", "erreur", "message", "bug", "lent"],
+      "sous_domaines": [
+        {
+          "id": "crash",
+          "nom": "Crash / Plantage",
+          "description": "Application qui se ferme de façon inattendue",
+          "mots_cles": ["plante", "crash", "ferme", "arrête", "freeze"],
+          "contexte_1": {
+            "question": "Le crash est-il reproductible ? Arrive-t-il toujours dans la même situation ?",
+            "options": ["Oui, toujours dans la même action", "Aléatoire, sans raison apparente", "Uniquement au démarrage de l'app"]
+          },
+          "contexte_2": {
+            "question": "Y a-t-il un message d'erreur affiché avant le crash ?",
+            "options": ["Oui, avec un code d'erreur", "Oui, message en texte", "Non, ça ferme sans avertissement", "Je n'ai pas eu le temps de lire"]
+          }
+        },
+        {
+          "id": "performance",
+          "nom": "Lenteurs / Performance",
+          "description": "Application lente ou système ralenti",
+          "mots_cles": ["lent", "lenteur", "rame", "freeze", "lag", "bloqué"],
+          "contexte_1": {
+            "question": "La lenteur concerne-t-elle une seule application ou tout le système ?",
+            "options": ["Une seule application", "Plusieurs applications", "Tout le système"]
+          },
+          "contexte_2": {
+            "question": "Quand le problème de lenteur apparaît-il ?",
+            "options": ["Dès le démarrage", "Après quelques minutes d'utilisation", "Lors d'une action spécifique", "De façon aléatoire"]
+          }
+        }
+      ]
+    }
+  ]
+}
