@@ -11,8 +11,9 @@ class EtapeDiagnostic(Enum):
     ACCUEIL = "accueil"
     COLLECTE_DESCRIPTION = "collecte_description"
     IDENTIFICATION_FICHE = "identification_fiche"
-    COLLECTE_NIVEAU1 = "collecte_niveau1"   # Phase questions ouvertes
-    VALIDATION = "validation"
+    COLLECTE_NIVEAU1 = "collecte_niveau1"       # Open questions phase
+    COMPLEMENTS = "complements"                  # "Anything else?" loop
+    VALIDATION = "validation"                    # Customer validates final summary
     TERMINE = "termine"
 
 
@@ -22,19 +23,19 @@ class SessionDiagnostic:
 
     description_initiale: str = ""
 
-    # Fiche identifiée
+    # Identified fault
     domaine_id: Optional[str] = None
     domaine_nom: Optional[str] = None
     fiche_id: Optional[str] = None
     fiche_titre: Optional[str] = None
 
-    # Suivi des questions posées
+    # Question counter (safety cap)
     compteur_questions: int = 0
 
-    # Historique complet de la conversation (pour le LLM)
+    # Full conversation history (sent to LLM)
     historique: list = field(default_factory=list)
 
-    # Synthèse finale
+    # Running summary — updated after each complement
     synthese: Optional[str] = None
 
     def ajouter_message(self, role: str, contenu: str):

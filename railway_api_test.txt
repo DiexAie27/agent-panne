@@ -1,0 +1,4 @@
+Invoke-RestMethod -Uri "https://railway.mystellantis.org/generate-link" -Method POST -ContentType "application/json" -Body '{"repair_order_id": "RO-001", "vehicle": "Peugeot 308", "customer_name": "John"}'
+
+# Test chat (use the token returned above)
+Invoke-RestMethod -Uri "https://railway.mystellantis.org/chat" -Method POST -ContentType "application/json" -Body '{"session_id": "508718e7-5061-4862-9d94-a138e865aa26", "message": ""}'

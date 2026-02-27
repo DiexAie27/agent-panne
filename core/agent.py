@@ -1,7 +1,6 @@
 """
 Agent conversationnel de diagnostic CIF - approche questions ouvertes.
-Le LLM lit l'arbre en arrière-plan et pose jusqu'à 4 questions naturelles,
-en sautant ce que le client a déjà dit. Restitution finale sans conseil de réparation.
+Flux : identification fiche → questions ouvertes → boucle compléments → validation.
 """
 
 import os
@@ -15,8 +14,8 @@ from core.arbre import ArbreDecision
 #  Prompts                                                            #
 # ------------------------------------------------------------------ #
 
-PROMPT_SYSTEM_BASE = """You are a vehicle fault intake specialist. 
-Your role is to collect a precise description of a vehicle fault from a customer, 
+PROMPT_SYSTEM_BASE = """You are a vehicle fault intake specialist.
+Your role is to collect a precise description of a vehicle fault from a customer,
 using natural conversational language — not technical jargon.
 
 Key rules:
@@ -36,7 +35,7 @@ Below is the list of known fault types, grouped by system (perimeter):
 
 Your tasks:
 1. Identify the single most likely perimeter (system) and CIF fault title that matches the description.
-2. If you are not confident, identify the top 2 candidates.
+2. If you are not confident, identify the top candidate and prepare a clarification question.
 
 Reply ONLY with a JSON object:
 {{
@@ -76,15 +75,22 @@ Reply ONLY with a JSON object:
 """
 
 PROMPT_SYNTHESE = """
-Based on the conversation below, write a concise factual paragraph (5-8 lines) 
-summarising the vehicle fault for a technician.
+Based on the conversation below, write a concise fault summary paragraph (5-8 lines)
+for a vehicle technician.
 
 Rules:
-- Use plain, factual language
+- Write in a neutral, factual tone — like a technician's field note
+- Do NOT mention the customer, use "the vehicle" or passive constructions instead
 - Do NOT suggest any cause, diagnosis, or repair
 - Do NOT use bullet points — write a single flowing paragraph
-- Capture all details the customer mentioned: what happens, when, any warning lights, 
-  any messages on screen, any conditions that make it better or worse
+- Capture all observed details: what happens, under what conditions, any warning lights,
+  any dashboard messages, anything that makes it better or worse
+- If something was not observed or not present (e.g. no warning light), include that too
+
+Example style:
+"During braking, a whistling sound occurs systematically, accompanied by visible smoke.
+The vehicle pulls to the right at the same time. The issue is consistent and reproducible
+regardless of road conditions. No warning light is present on the dashboard."
 
 Fault identification:
 - Perimeter: {perimeter}
@@ -94,13 +100,39 @@ Conversation:
 {historique}
 """
 
+PROMPT_REFORMULER_COMPLEMENT = """
+Below is the current fault summary and a new detail just provided.
+Rewrite the summary to naturally incorporate the new information.
+
+Rules:
+- Write in a neutral, factual tone — like a technician's field note
+- Do NOT mention the customer, use "the vehicle" or passive constructions instead
+- Do NOT suggest any cause, diagnosis, or repair
+- Do NOT use bullet points — write a single flowing paragraph
+- Do NOT lose any previously captured information
+
+Current summary:
+{synthese_actuelle}
+
+New detail:
+{complement}
+
+Write the updated paragraph directly, no preamble.
+"""
+
+# Phrases that mean "nothing more to add"
+NEGATIVE_RESPONSES = [
+    "no", "nope", "nothing", "that's all", "that's it", "nothing else",
+    "no more", "i'm good", "done", "finish", "that's everything",
+    "non", "rien", "c'est tout", "rien d'autre", "c'est bon", "terminé"
+]
+
 
 # ------------------------------------------------------------------ #
-#  Formatage de l'arbre pour les prompts                             #
+#  Helpers                                                            #
 # ------------------------------------------------------------------ #
 
 def _formater_arbre_pour_identification(arbre: ArbreDecision) -> str:
-    """Retourne une version textuelle compacte de tous les domaines + titres CIF."""
     lignes = []
     for domaine in arbre.data["domaines"]:
         lignes.append(f"\n[{domaine['nom']}]")
@@ -110,21 +142,12 @@ def _formater_arbre_pour_identification(arbre: ArbreDecision) -> str:
 
 
 def _formater_dimensions(arbre: ArbreDecision, domaine_id: str, fiche_id: str) -> str:
-    """
-    Extrait les dimensions clés de l'arbre pour une fiche donnée.
-    Chaque 'dimension' est un axe d'observation que le LLM doit couvrir.
-    """
     fiche = arbre.get_fiche(domaine_id, fiche_id)
     if not fiche:
         return ""
-
     lignes = []
-
-    # Dimension 1 : les Level 1 = nature/catégorie du problème
     niveaux1 = [n["label"] for n in fiche["niveaux"]]
     lignes.append(f"Dimension 1 - Nature of the problem: {' | '.join(niveaux1)}")
-
-    # Dimension 2 : les Level 2 = comportement/sévérité
     tous_niveaux2 = set()
     for n1 in fiche["niveaux"]:
         for n2 in n1["options"]:
@@ -134,8 +157,6 @@ def _formater_dimensions(arbre: ArbreDecision, domaine_id: str, fiche_id: str) -
                 tous_niveaux2.add(n2)
     if tous_niveaux2:
         lignes.append(f"Dimension 2 - Behaviour / severity: {' | '.join(sorted(tous_niveaux2))}")
-
-    # Dimension 3 : les Level 3 = contexte observable (warning lamps, messages, workarounds)
     tous_niveaux3 = set()
     for n1 in fiche["niveaux"]:
         for n2 in n1["options"]:
@@ -143,20 +164,25 @@ def _formater_dimensions(arbre: ArbreDecision, domaine_id: str, fiche_id: str) -
                 for n3 in n2.get("options", []):
                     tous_niveaux3.add(n3)
     if tous_niveaux3:
-        # On regroupe par thème pour ne pas noyer le LLM
-        lignes.append(f"Dimension 3 - Observable context (warning lamps, dashboard messages, workarounds): "
-                      f"{' | '.join(sorted(tous_niveaux3))}")
-
+        lignes.append(
+            f"Dimension 3 - Observable context (warning lamps, dashboard messages, workarounds): "
+            f"{' | '.join(sorted(tous_niveaux3))}"
+        )
     return "\n".join(lignes)
 
 
 def _formater_historique(historique: list) -> str:
-    """Formate l'historique pour injection dans un prompt."""
     lignes = []
     for msg in historique:
         role = "Customer" if msg["role"] == "user" else "Agent"
         lignes.append(f"{role}: {msg['content']}")
     return "\n".join(lignes)
+
+
+def _est_reponse_negative(message: str) -> bool:
+    """Détecte si le client dit qu'il n'a rien à ajouter."""
+    msg = message.strip().lower().rstrip(".,!?")
+    return msg in NEGATIVE_RESPONSES or any(msg == neg for neg in NEGATIVE_RESPONSES)
 
 
 # ------------------------------------------------------------------ #
@@ -169,7 +195,6 @@ class AgentDiagnostic:
         self.client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
         self.arbre = ArbreDecision()
         self.model = "llama-3.3-70b-versatile"
-        # Limite de questions ouvertes avant de passer à la synthèse
         self.max_questions = 4
 
     # ------------------------------------------------------------------ #
@@ -187,12 +212,13 @@ class AgentDiagnostic:
             reponse = self._etape_description(message, session)
 
         elif session.etape == EtapeDiagnostic.IDENTIFICATION_FICHE:
-            # Le client a répondu à une question de clarification sur l'identification
             reponse = self._identifier_fiche(session)
 
         elif session.etape == EtapeDiagnostic.COLLECTE_NIVEAU1:
-            # Phase principale : questions ouvertes pilotées par le LLM
             reponse = self._etape_questions_ouvertes(message, session)
+
+        elif session.etape == EtapeDiagnostic.COMPLEMENTS:
+            reponse = self._etape_complements(message, session)
 
         elif session.etape == EtapeDiagnostic.VALIDATION:
             reponse = self._etape_validation(message, session)
@@ -221,14 +247,8 @@ class AgentDiagnostic:
         return self._identifier_fiche(session)
 
     def _identifier_fiche(self, session: SessionDiagnostic) -> str:
-        """
-        Utilise le LLM pour identifier le périmètre et la fiche CIF.
-        Si confiance faible, pose une question de clarification et reste dans cet état.
-        Si confiance haute/moyenne, passe aux questions ouvertes.
-        """
         arbre_texte = _formater_arbre_pour_identification(self.arbre)
         historique_texte = _formater_historique(session.historique)
-
         prompt = PROMPT_IDENTIFIER_FICHE.format(
             description=historique_texte,
             arbre_complet=arbre_texte,
@@ -236,11 +256,9 @@ class AgentDiagnostic:
         result = self._llm_json(prompt)
 
         if not result:
-            # Fallback neutre
             session.etape = EtapeDiagnostic.IDENTIFICATION_FICHE
             return "Could you tell me a bit more about what's happening with the vehicle?"
 
-        # Retrouver les IDs correspondant aux noms retournés par le LLM
         domaine_id, fiche_id = self._resoudre_ids(
             result.get("perimeter", ""),
             result.get("cif_title", "")
@@ -253,43 +271,24 @@ class AgentDiagnostic:
             session.fiche_titre = result["cif_title"]
 
             if result.get("confiance") == "low" and result.get("question"):
-                # On reste en IDENTIFICATION_FICHE et on pose la question
                 return result["question"]
             else:
-                # Confiance suffisante : on passe aux questions ouvertes
                 session.etape = EtapeDiagnostic.COLLECTE_NIVEAU1
                 session.compteur_questions = 0
                 return self._poser_prochaine_question(session)
         else:
-            # Le LLM n'a pas trouvé de correspondance claire
             session.etape = EtapeDiagnostic.IDENTIFICATION_FICHE
-            question = result.get("question") or "Can you describe more specifically what system or part of the vehicle is affected?"
-            return question
+            return result.get("question") or "Can you describe more specifically what system or part of the vehicle is affected?"
 
     def _etape_questions_ouvertes(self, message: str, session: SessionDiagnostic) -> str:
-        """
-        Phase principale : le LLM décide si une nouvelle question est nécessaire
-        ou si toutes les dimensions sont couvertes.
-        """
-        if not hasattr(session, 'compteur_questions'):
-            session.compteur_questions = 0
-
         session.compteur_questions += 1
-
-        # Sécurité : ne pas dépasser max_questions
         if session.compteur_questions >= self.max_questions:
-            return self._generer_synthese(session)
-
+            return self._lancer_complements(session)
         return self._poser_prochaine_question(session)
 
     def _poser_prochaine_question(self, session: SessionDiagnostic) -> str:
-        """
-        Demande au LLM quelle est la prochaine question à poser,
-        ou s'il faut passer à la synthèse.
-        """
         dimensions = _formater_dimensions(self.arbre, session.domaine_id, session.fiche_id)
         historique_texte = _formater_historique(session.historique)
-
         prompt = PROMPT_PROCHAINE_QUESTION.format(
             perimeter=session.domaine_nom,
             cif_title=session.fiche_titre,
@@ -299,38 +298,72 @@ class AgentDiagnostic:
         result = self._llm_json(prompt)
 
         if not result or result.get("action") == "done":
-            return self._generer_synthese(session)
+            return self._lancer_complements(session)
 
         question = result.get("question")
         if not question:
-            return self._generer_synthese(session)
+            return self._lancer_complements(session)
 
         return question
 
-    def _generer_synthese(self, session: SessionDiagnostic) -> str:
-        """Génère le paragraphe de synthèse et le soumet à validation."""
-        historique_texte = _formater_historique(session.historique)
+    # ------------------------------------------------------------------ #
+    #  Boucle compléments                                                 #
+    # ------------------------------------------------------------------ #
 
-        prompt = PROMPT_SYNTHESE.format(
-            perimeter=session.domaine_nom,
-            cif_title=session.fiche_titre,
-            historique=historique_texte,
-        )
-        synthese = self._llm_texte(prompt)
-        session.synthese = synthese
-        session.etape = EtapeDiagnostic.VALIDATION
-
+    def _lancer_complements(self, session: SessionDiagnostic) -> str:
+        """Génère une première synthèse et ouvre la boucle compléments."""
+        session.synthese = self._appel_synthese(session)
+        session.etape = EtapeDiagnostic.COMPLEMENTS
         return (
-            "Thank you for all the details. Here is the summary I'll send to our technical team:\n\n"
-            f"---\n{synthese}\n---\n\n"
-            "Does this accurately reflect the issue you're experiencing? "
+            "Thank you, I now have a good picture of the issue. "
+            "Here is what I have captured so far:\n\n"
+            f"---\n{session.synthese}\n---\n\n"
+            "Is there anything else you have noticed or would like to add — "
+            "even if it seems minor? For example, a noise, a smell, a specific condition "
+            "when it happens, or anything unusual about the vehicle."
+        )
+
+    def _etape_complements(self, message: str, session: SessionDiagnostic) -> str:
+        """
+        Boucle : le client ajoute des informations jusqu'à dire 'non'.
+        À chaque ajout, la synthèse est mise à jour et on redemande.
+        """
+        if _est_reponse_negative(message):
+            # Le client n'a rien à ajouter → on passe à la validation
+            return self._soumettre_synthese(session)
+
+        # Le client a ajouté quelque chose → on met à jour la synthèse
+        prompt = PROMPT_REFORMULER_COMPLEMENT.format(
+            synthese_actuelle=session.synthese,
+            complement=message,
+        )
+        session.synthese = self._llm_texte(prompt)
+
+        # On redemande s'il y a autre chose
+        return (
+            "Noted, I've updated the report. Here is the revised summary:\n\n"
+            f"---\n{session.synthese}\n---\n\n"
+            "Is there anything else you'd like to add?"
+        )
+
+    def _soumettre_synthese(self, session: SessionDiagnostic) -> str:
+        """Présente la synthèse finale au client pour validation."""
+        session.etape = EtapeDiagnostic.VALIDATION
+        return (
+            "Here is the complete summary I'll send to our technical team:\n\n"
+            f"---\n{session.synthese}\n---\n\n"
+            "Does this accurately reflect everything you've described? "
             "Reply **yes** to confirm, or let me know what should be corrected."
         )
+
+    # ------------------------------------------------------------------ #
+    #  Validation                                                         #
+    # ------------------------------------------------------------------ #
 
     def _etape_validation(self, message: str, session: SessionDiagnostic) -> str:
         positif = any(w in message.lower() for w in [
             "yes", "correct", "ok", "right", "confirm", "good", "perfect",
-            "oui", "valide", "parfait", "correct", "c'est ça"
+            "oui", "valide", "parfait", "c'est ça"
         ])
         if positif:
             session.etape = EtapeDiagnostic.TERMINE
@@ -339,26 +372,33 @@ class AgentDiagnostic:
                 "Thank you for your time."
             )
         else:
-            # Le client veut corriger : on relance les questions ouvertes
-            session.etape = EtapeDiagnostic.COLLECTE_NIVEAU1
-            session.compteur_questions = 0
+            # Restart complement loop with the correction
+            session.etape = EtapeDiagnostic.COMPLEMENTS
             return (
-                "No problem. Could you tell me what was inaccurate or missing, "
-                "and I'll update the report."
+                "No problem. Could you tell me what was inaccurate or missing? "
+                "I'll update the report."
             )
 
     # ------------------------------------------------------------------ #
-    #  Résolution des IDs depuis les noms retournés par le LLM           #
+    #  Génération de synthèse                                             #
+    # ------------------------------------------------------------------ #
+
+    def _appel_synthese(self, session: SessionDiagnostic) -> str:
+        historique_texte = _formater_historique(session.historique)
+        prompt = PROMPT_SYNTHESE.format(
+            perimeter=session.domaine_nom,
+            cif_title=session.fiche_titre,
+            historique=historique_texte,
+        )
+        return self._llm_texte(prompt)
+
+    # ------------------------------------------------------------------ #
+    #  Résolution IDs                                                     #
     # ------------------------------------------------------------------ #
 
     def _resoudre_ids(self, perimeter_nom: str, cif_titre: str):
-        """
-        Retrouve domaine_id et fiche_id à partir des noms en texte libre
-        retournés par le LLM (correspondance insensible à la casse).
-        """
         domaine_id = None
         fiche_id = None
-
         for domaine in self.arbre.data["domaines"]:
             if domaine["nom"].lower() == perimeter_nom.lower():
                 domaine_id = domaine["id"]
@@ -367,8 +407,6 @@ class AgentDiagnostic:
                         fiche_id = fiche["id"]
                         break
                 break
-
-        # Fallback : correspondance partielle si exacte échoue
         if not domaine_id:
             for domaine in self.arbre.data["domaines"]:
                 if perimeter_nom.lower() in domaine["nom"].lower():
@@ -379,7 +417,6 @@ class AgentDiagnostic:
                             fiche_id = fiche["id"]
                             break
                     break
-
         return domaine_id, fiche_id
 
     # ------------------------------------------------------------------ #
