@@ -1,4 +1,4 @@
-import os, uuid, json
+import os, uuid
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -42,11 +42,12 @@ def generate_link(body: LinkRequest):
     """Called by the SA to create a diagnostic session and get a shareable URL."""
     token = str(uuid.uuid4())
     session = SessionDiagnostic()
+    # Store repair order context directly on the session object
     session.repair_order_id = body.repair_order_id
     session.vehicle = body.vehicle
     session.customer_name = body.customer_name
     sessions[token] = session
-    base_url = os.environ.get("FLUTTER_APP_URL", "https://single-repairer-portal-fwp8v2.flutterflow.app/")
+    base_url = os.environ.get("FLUTTER_APP_URL", "https://your-flutterflow-app.com")
     return {
         "token": token,
         "url": f"{base_url}/diagnostic?token={token}"
@@ -61,9 +62,30 @@ def chat(body: MessageIn):
         raise HTTPException(status_code=404, detail="Session not found or expired")
 
     response = agent.traiter_message(body.message, session)
+
+    termine = session.etape == EtapeDiagnostic.TERMINE
+
     return {
+        # Agent reply to display in the chat
         "response": response,
+
+        # Current step — use this in FlutterFlow to show/hide the finish button
+        # Possible values: accueil | collecte_description | identification_fiche |
+        #                  collecte_niveau1 | complements | validation | termine
         "etape": session.etape.value,
-        "termine": session.etape == EtapeDiagnostic.TERMINE,
-        "synthese": session.synthese if session.etape == EtapeDiagnostic.TERMINE else None
+
+        # True only when the full diagnostic is complete and validated
+        "termine": termine,
+
+        # Free-text summary paragraph — available from the complements phase onward
+        "synthese": session.synthese,
+
+        # CIF probability ranking — populated only when termine = true
+        # Format: [{"perimeter": str, "cif_title": str, "probabilite": int}, ...]
+        "cif_ranking": session.cif_ranking if termine else [],
+
+        # Identified fault reference (available once fiche is identified)
+        "perimeter": session.domaine_nom,
+        "cif_title": session.fiche_titre,
+        "fiche_id": session.fiche_id,
     }
