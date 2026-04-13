@@ -126,24 +126,24 @@ Write the updated paragraph directly, no preamble.
 """
 
 PROMPT_RANKING_CIF = """
-Based on the full conversation below, identify the most probable CIF fault type(s)
-from the list provided. For each, estimate a probability as a percentage.
+Based on the full conversation below, your task has two steps.
 
-The list below uses this format:
+STEP 1 — List all CIF titles from the list below that could plausibly match the described fault,
+even if some are less likely than others. Be inclusive: if a CIF title cannot be ruled out based
+on what was said, include it.
+
+STEP 2 — From your step 1 list, keep the top 1 to 3 most probable ones and assign a probability
+percentage to each. Probabilities must sum to 100.
+
+The list uses this format:
   PERIMETER: <system category name>
     CIF: <specific fault title>
 
-You must return the PERIMETER name and the CIF title exactly as written after "CIF:".
-Never return a PERIMETER name as a cif_title.
-
 Rules:
-- Always consider whether 2 or 3 CIF titles could plausibly match — do not default to 1 if there is genuine ambiguity
-- If the description is precise and one CIF is clearly dominant: return 1 entry at 100%
-- If the description could match 2 CIF titles: return 2 entries, split the probability honestly (e.g. 70/30)
-- If the description is vague and 3 CIF titles are plausible: return 3 entries (e.g. 50/30/20)
-- Probabilities must always sum to 100
-- Be honest about uncertainty — it is better to show 2 candidates than to force a single wrong answer
-- cif_title must ALWAYS be a value that appears after "CIF:" in the list — never a PERIMETER name
+- cif_title must ALWAYS be a value after "CIF:" — never a PERIMETER name
+- Return 1 entry at 100% ONLY if all other CIF titles can be clearly ruled out by the conversation
+- In most cases, return 2 or 3 entries with split probabilities
+- Probabilities must sum to 100
 
 Known fault types:
 {arbre_complet}
@@ -153,8 +153,8 @@ Conversation:
 
 Reply ONLY with a JSON array (1 to 3 items):
 [
-  {{"perimeter": "exact PERIMETER name", "cif_title": "exact CIF title", "probabilite": 70}},
-  {{"perimeter": "exact PERIMETER name", "cif_title": "exact CIF title", "probabilite": 30}}
+  {{"perimeter": "exact PERIMETER name", "cif_title": "exact CIF title after CIF:", "probabilite": 65}},
+  {{"perimeter": "exact PERIMETER name", "cif_title": "exact CIF title after CIF:", "probabilite": 35}}
 ]
 """
 
@@ -390,6 +390,10 @@ class AgentDiagnostic:
             historique=historique_texte,
         )
         return self._llm_texte(prompt)
+
+    def appel_ranking_cif_public(self, session: SessionDiagnostic) -> list:
+        """Public wrapper for app.py to call ranking at any step."""
+        return self._appel_ranking_cif(session)
 
     def _appel_ranking_cif(self, session: SessionDiagnostic) -> list:
         """Asks the LLM to rank the top 1-3 most probable CIF with probabilities."""
