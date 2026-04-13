@@ -21,9 +21,10 @@ class EtapeDiagnostic(Enum):
 class SessionDiagnostic:
     etape: EtapeDiagnostic = EtapeDiagnostic.ACCUEIL
 
+    # Description libre du client
     description_initiale: str = ""
 
-    # Identified fault
+    # Fiche identifiée pendant la conversation
     domaine_id: Optional[str] = None
     domaine_nom: Optional[str] = None
     fiche_id: Optional[str] = None
@@ -38,6 +39,10 @@ class SessionDiagnostic:
     # Running summary — updated after each complement
     synthese: Optional[str] = None
 
+    # CIF ranking — top 1-3 probable fiches with probabilities
+    # Format: [{"perimeter": str, "cif_title": str, "probabilite": int}, ...]
+    cif_ranking: list = field(default_factory=list)
+
     def ajouter_message(self, role: str, contenu: str):
         self.historique.append({"role": role, "content": contenu})
 
@@ -49,4 +54,5 @@ class SessionDiagnostic:
             "cif_title": self.fiche_titre,
             "questions_asked": self.compteur_questions,
             "synthese": self.synthese,
+            "cif_ranking": self.cif_ranking,
         }

@@ -60,17 +60,18 @@ Conversation so far:
 {historique}
 
 Your task:
-- Review what the customer has already said.
-- Identify which dimensions are NOT yet clearly covered by their answers.
-- If all dimensions are covered, reply with {{"action": "done"}}.
-- If there are uncovered dimensions, ask the NEXT most important open question in plain, friendly language.
+- Read the ENTIRE conversation carefully, including the very first message where the customer described their issue.
+- Any information already mentioned — even in the first message — must be treated as KNOWN. Do NOT ask about it again.
+- Identify only dimensions that are genuinely absent from everything said so far.
+- If all key dimensions are covered, reply with {{"action": "done"}}.
+- If there is a truly missing dimension, ask ONE question about it in plain, friendly language.
   Do not reveal the tree structure. Do not offer numbered options. Ask as a human would.
 
 Reply ONLY with a JSON object:
 {{
   "action": "ask" | "done",
   "question": "your natural language question, or null if done",
-  "dimensions_manquantes": ["list of dimension labels still missing"]
+  "dimensions_manquantes": ["list of dimension labels genuinely missing"]
 }}
 """
 
@@ -120,6 +121,30 @@ New detail:
 Write the updated paragraph directly, no preamble.
 """
 
+PROMPT_RANKING_CIF = """
+Based on the full conversation below, identify the top 1 to 3 most probable CIF fault types
+from the list provided. For each, estimate a probability as a percentage (all must sum to 100).
+
+Rules:
+- Only include CIF titles that genuinely match the described symptoms
+- If one CIF is clearly dominant, list only that one with 100%
+- If 2 or 3 are plausible, distribute the probability accordingly
+- Be honest: do not force 3 candidates if only 1 or 2 are relevant
+- Use ONLY titles from the list below — do not invent titles
+
+Known fault types:
+{arbre_complet}
+
+Conversation:
+{historique}
+
+Reply ONLY with a JSON array:
+[
+  {{"perimeter": "exact perimeter name", "cif_title": "exact CIF title", "probabilite": 75}},
+  {{"perimeter": "exact perimeter name", "cif_title": "exact CIF title", "probabilite": 25}}
+]
+"""
+
 # Phrases that mean "nothing more to add"
 NEGATIVE_RESPONSES = [
     "no", "nope", "nothing", "that's all", "that's it", "nothing else",
@@ -129,47 +154,8 @@ NEGATIVE_RESPONSES = [
 
 
 # ------------------------------------------------------------------ #
-#  Helpers                                                            #
+#  Helper                                                             #
 # ------------------------------------------------------------------ #
-
-def _formater_arbre_pour_identification(arbre: ArbreDecision) -> str:
-    lignes = []
-    for domaine in arbre.data["domaines"]:
-        lignes.append(f"\n[{domaine['nom']}]")
-        for fiche in domaine["fiches"]:
-            lignes.append(f"  - {fiche['titre']}")
-    return "\n".join(lignes)
-
-
-def _formater_dimensions(arbre: ArbreDecision, domaine_id: str, fiche_id: str) -> str:
-    fiche = arbre.get_fiche(domaine_id, fiche_id)
-    if not fiche:
-        return ""
-    lignes = []
-    niveaux1 = [n["label"] for n in fiche["niveaux"]]
-    lignes.append(f"Dimension 1 - Nature of the problem: {' | '.join(niveaux1)}")
-    tous_niveaux2 = set()
-    for n1 in fiche["niveaux"]:
-        for n2 in n1["options"]:
-            if isinstance(n2, dict):
-                tous_niveaux2.add(n2["label"])
-            elif isinstance(n2, str):
-                tous_niveaux2.add(n2)
-    if tous_niveaux2:
-        lignes.append(f"Dimension 2 - Behaviour / severity: {' | '.join(sorted(tous_niveaux2))}")
-    tous_niveaux3 = set()
-    for n1 in fiche["niveaux"]:
-        for n2 in n1["options"]:
-            if isinstance(n2, dict):
-                for n3 in n2.get("options", []):
-                    tous_niveaux3.add(n3)
-    if tous_niveaux3:
-        lignes.append(
-            f"Dimension 3 - Observable context (warning lamps, dashboard messages, workarounds): "
-            f"{' | '.join(sorted(tous_niveaux3))}"
-        )
-    return "\n".join(lignes)
-
 
 def _formater_historique(historique: list) -> str:
     lignes = []
@@ -180,9 +166,8 @@ def _formater_historique(historique: list) -> str:
 
 
 def _est_reponse_negative(message: str) -> bool:
-    """Détecte si le client dit qu'il n'a rien à ajouter."""
     msg = message.strip().lower().rstrip(".,!?")
-    return msg in NEGATIVE_RESPONSES or any(msg == neg for neg in NEGATIVE_RESPONSES)
+    return msg in NEGATIVE_RESPONSES
 
 
 # ------------------------------------------------------------------ #
@@ -247,11 +232,10 @@ class AgentDiagnostic:
         return self._identifier_fiche(session)
 
     def _identifier_fiche(self, session: SessionDiagnostic) -> str:
-        arbre_texte = _formater_arbre_pour_identification(self.arbre)
         historique_texte = _formater_historique(session.historique)
         prompt = PROMPT_IDENTIFIER_FICHE.format(
             description=historique_texte,
-            arbre_complet=arbre_texte,
+            arbre_complet=self.arbre.arbre_pour_identification(),
         )
         result = self._llm_json(prompt)
 
@@ -259,7 +243,7 @@ class AgentDiagnostic:
             session.etape = EtapeDiagnostic.IDENTIFICATION_FICHE
             return "Could you tell me a bit more about what's happening with the vehicle?"
 
-        domaine_id, fiche_id = self._resoudre_ids(
+        domaine_id, fiche_id = self.arbre.resoudre_ids(
             result.get("perimeter", ""),
             result.get("cif_title", "")
         )
@@ -287,13 +271,20 @@ class AgentDiagnostic:
         return self._poser_prochaine_question(session)
 
     def _poser_prochaine_question(self, session: SessionDiagnostic) -> str:
-        dimensions = _formater_dimensions(self.arbre, session.domaine_id, session.fiche_id)
+        dimensions = self.arbre.dimensions_pour_prompt(session.domaine_id, session.fiche_id)
         historique_texte = _formater_historique(session.historique)
+
+        # Prepend the initial description explicitly so the LLM cannot overlook it
+        contexte = (
+            f"[Initial description from customer]: {session.description_initiale}\n\n"
+            f"{historique_texte}"
+        )
+
         prompt = PROMPT_PROCHAINE_QUESTION.format(
             perimeter=session.domaine_nom,
             cif_title=session.fiche_titre,
             dimensions=dimensions,
-            historique=historique_texte,
+            historique=contexte,
         )
         result = self._llm_json(prompt)
 
@@ -311,7 +302,6 @@ class AgentDiagnostic:
     # ------------------------------------------------------------------ #
 
     def _lancer_complements(self, session: SessionDiagnostic) -> str:
-        """Génère une première synthèse et ouvre la boucle compléments."""
         session.synthese = self._appel_synthese(session)
         session.etape = EtapeDiagnostic.COMPLEMENTS
         return (
@@ -324,22 +314,15 @@ class AgentDiagnostic:
         )
 
     def _etape_complements(self, message: str, session: SessionDiagnostic) -> str:
-        """
-        Boucle : le client ajoute des informations jusqu'à dire 'non'.
-        À chaque ajout, la synthèse est mise à jour et on redemande.
-        """
         if _est_reponse_negative(message):
-            # Le client n'a rien à ajouter → on passe à la validation
             return self._soumettre_synthese(session)
 
-        # Le client a ajouté quelque chose → on met à jour la synthèse
         prompt = PROMPT_REFORMULER_COMPLEMENT.format(
             synthese_actuelle=session.synthese,
             complement=message,
         )
         session.synthese = self._llm_texte(prompt)
 
-        # On redemande s'il y a autre chose
         return (
             "Noted, I've updated the report. Here is the revised summary:\n\n"
             f"---\n{session.synthese}\n---\n\n"
@@ -347,11 +330,15 @@ class AgentDiagnostic:
         )
 
     def _soumettre_synthese(self, session: SessionDiagnostic) -> str:
-        """Présente la synthèse finale au client pour validation."""
         session.etape = EtapeDiagnostic.VALIDATION
+        # Run CIF ranking
+        ranking = self._appel_ranking_cif(session)
+        session.cif_ranking = ranking
+        ranking_texte = self._formater_ranking(ranking)
         return (
             "Here is the complete summary I'll send to our technical team:\n\n"
             f"---\n{session.synthese}\n---\n\n"
+            f"{ranking_texte}\n\n"
             "Does this accurately reflect everything you've described? "
             "Reply **yes** to confirm, or let me know what should be corrected."
         )
@@ -372,7 +359,6 @@ class AgentDiagnostic:
                 "Thank you for your time."
             )
         else:
-            # Restart complement loop with the correction
             session.etape = EtapeDiagnostic.COMPLEMENTS
             return (
                 "No problem. Could you tell me what was inaccurate or missing? "
@@ -392,32 +378,44 @@ class AgentDiagnostic:
         )
         return self._llm_texte(prompt)
 
-    # ------------------------------------------------------------------ #
-    #  Résolution IDs                                                     #
-    # ------------------------------------------------------------------ #
+    def _appel_ranking_cif(self, session: SessionDiagnostic) -> list:
+        """Asks the LLM to rank the top 1-3 most probable CIF with probabilities."""
+        historique_texte = _formater_historique(session.historique)
+        prompt = PROMPT_RANKING_CIF.format(
+            arbre_complet=self.arbre.arbre_pour_identification(),
+            historique=historique_texte,
+        )
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": PROMPT_SYSTEM_BASE},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.1,
+                max_tokens=400,
+            )
+            contenu = response.choices[0].message.content.strip()
+            contenu = contenu.replace("```json", "").replace("```", "").strip()
+            return json.loads(contenu)
+        except Exception as e:
+            print(f"[LLM RANKING ERROR] {e}")
+            # Fallback: return the fiche identified during the conversation
+            return [{"perimeter": session.domaine_nom,
+                     "cif_title": session.fiche_titre,
+                     "probabilite": 100}]
 
-    def _resoudre_ids(self, perimeter_nom: str, cif_titre: str):
-        domaine_id = None
-        fiche_id = None
-        for domaine in self.arbre.data["domaines"]:
-            if domaine["nom"].lower() == perimeter_nom.lower():
-                domaine_id = domaine["id"]
-                for fiche in domaine["fiches"]:
-                    if fiche["titre"].lower() == cif_titre.lower():
-                        fiche_id = fiche["id"]
-                        break
-                break
-        if not domaine_id:
-            for domaine in self.arbre.data["domaines"]:
-                if perimeter_nom.lower() in domaine["nom"].lower():
-                    domaine_id = domaine["id"]
-                    for fiche in domaine["fiches"]:
-                        if cif_titre.lower() in fiche["titre"].lower() or \
-                           fiche["titre"].lower() in cif_titre.lower():
-                            fiche_id = fiche["id"]
-                            break
-                    break
-        return domaine_id, fiche_id
+    def _formater_ranking(self, ranking: list) -> str:
+        """Formats the CIF ranking as a readable block for the customer message."""
+        if not ranking:
+            return ""
+        lignes = ["**Most probable fault type(s):**"]
+        for item in ranking:
+            prob = item.get("probabilite", "?")
+            perimeter = item.get("perimeter", "")
+            titre = item.get("cif_title", "")
+            lignes.append(f"- {prob}% — [{perimeter}] {titre}")
+        return "\n".join(lignes)
 
     # ------------------------------------------------------------------ #
     #  Appels LLM                                                         #
