@@ -65,26 +65,31 @@ def chat(body: MessageIn):
 
     termine = session.etape == EtapeDiagnostic.TERMINE
 
+    # Compute live CIF ranking as soon as a fiche is identified
+    cif_ranking = []
+    if session.fiche_id:
+        cif_ranking = agent.appel_ranking_cif_public(session)
+
     return {
         # Agent reply to display in the chat
         "response": response,
 
-        # Current step — use this in FlutterFlow to show/hide the finish button
-        # Possible values: accueil | collecte_description | identification_fiche |
-        #                  collecte_niveau1 | complements | validation | termine
+        # Current step — use in FlutterFlow to show/hide buttons
+        # Values: accueil | collecte_description | identification_fiche |
+        #         collecte_niveau1 | complements | validation | termine
         "etape": session.etape.value,
 
         # True only when the full diagnostic is complete and validated
         "termine": termine,
 
-        # Free-text summary paragraph — available from the complements phase onward
+        # Free-text summary — available from the complements phase onward
         "synthese": session.synthese,
 
-        # CIF probability ranking — populated only when termine = true
+        # Live CIF ranking — updated after every message once fiche is identified
         # Format: [{"perimeter": str, "cif_title": str, "probabilite": int}, ...]
-        "cif_ranking": session.cif_ranking if termine else [],
+        "cif_ranking": cif_ranking,
 
-        # Identified fault reference (available once fiche is identified)
+        # Identified fault reference
         "perimeter": session.domaine_nom,
         "cif_title": session.fiche_titre,
         "fiche_id": session.fiche_id,
