@@ -36,9 +36,9 @@ class ArbreDecision:
         """Compact text listing of all perimeters and CIF titles for the LLM."""
         lignes = []
         for domaine in self.data["domaines"]:
-            lignes.append(f"\n[{domaine['nom']}]")
+            lignes.append(f"\nPERIMETER: {domaine['nom']}")
             for fiche in domaine["fiches"]:
-                lignes.append(f"  - {fiche['titre']}")
+                lignes.append(f"  CIF: {fiche['titre']}")
         return "\n".join(lignes)
 
     # ------------------------------------------------------------------ #

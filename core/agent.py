@@ -30,16 +30,20 @@ PROMPT_IDENTIFIER_FICHE = """
 A customer described a vehicle fault as follows:
 "{description}"
 
-Below is the list of known fault types, grouped by system (perimeter):
+Below is the list of known fault types. Format is:
+  PERIMETER: <system category>
+    CIF: <specific fault title>
+
 {arbre_complet}
 
 Your tasks:
-1. Identify the single most likely perimeter (system) and CIF fault title that matches the description.
-2. If you are not confident, identify the top candidate and prepare a clarification question.
+1. Identify the single most likely PERIMETER and CIF fault title that matches the description.
+2. The cif_title must be a value that appears after "CIF:" — never a PERIMETER name.
+3. If you are not confident, prepare a clarification question.
 
 Reply ONLY with a JSON object:
 {{
-  "perimeter": "exact perimeter name",
+  "perimeter": "exact PERIMETER name",
   "cif_title": "exact CIF title",
   "confiance": "high|medium|low",
   "question": "one natural language clarification question if confidence is low or medium, else null"
@@ -125,9 +129,12 @@ PROMPT_RANKING_CIF = """
 Based on the full conversation below, identify the most probable CIF fault type(s)
 from the list provided. For each, estimate a probability as a percentage.
 
-IMPORTANT: In the list below, items in [brackets] are PERIMETER names (system categories).
-The indented lines starting with "  - " are the CIF TITLES you must choose from.
-Never use a perimeter name as a cif_title.
+The list below uses this format:
+  PERIMETER: <system category name>
+    CIF: <specific fault title>
+
+You must return the PERIMETER name and the CIF title exactly as written after "CIF:".
+Never return a PERIMETER name as a cif_title.
 
 Rules:
 - Always consider whether 2 or 3 CIF titles could plausibly match — do not default to 1 if there is genuine ambiguity
@@ -136,7 +143,7 @@ Rules:
 - If the description is vague and 3 CIF titles are plausible: return 3 entries (e.g. 50/30/20)
 - Probabilities must always sum to 100
 - Be honest about uncertainty — it is better to show 2 candidates than to force a single wrong answer
-- Use ONLY the indented "  - " titles as cif_title values — never the [bracket] perimeter names
+- cif_title must ALWAYS be a value that appears after "CIF:" in the list — never a PERIMETER name
 
 Known fault types:
 {arbre_complet}
@@ -146,8 +153,8 @@ Conversation:
 
 Reply ONLY with a JSON array (1 to 3 items):
 [
-  {{"perimeter": "exact perimeter name from [brackets]", "cif_title": "exact indented title after  - ", "probabilite": 70}},
-  {{"perimeter": "exact perimeter name from [brackets]", "cif_title": "exact indented title after  - ", "probabilite": 30}}
+  {{"perimeter": "exact PERIMETER name", "cif_title": "exact CIF title", "probabilite": 70}},
+  {{"perimeter": "exact PERIMETER name", "cif_title": "exact CIF title", "probabilite": 30}}
 ]
 """
 
@@ -435,7 +442,7 @@ class AgentDiagnostic:
             prob = item.get("probabilite", "?")
             perimeter = item.get("perimeter", "")
             titre = item.get("cif_title", "")
-            lignes.append(f"- {prob}% — [{perimeter}] {titre}")
+            lignes.append(f"- {prob}% — {perimeter} / {titre}")
         return "\n".join(lignes)
 
     # ------------------------------------------------------------------ #
