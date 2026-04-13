@@ -122,15 +122,21 @@ Write the updated paragraph directly, no preamble.
 """
 
 PROMPT_RANKING_CIF = """
-Based on the full conversation below, identify the top 1 to 3 most probable CIF fault types
-from the list provided. For each, estimate a probability as a percentage (all must sum to 100).
+Based on the full conversation below, identify the most probable CIF fault type(s)
+from the list provided. For each, estimate a probability as a percentage.
+
+IMPORTANT: In the list below, items in [brackets] are PERIMETER names (system categories).
+The indented lines starting with "  - " are the CIF TITLES you must choose from.
+Never use a perimeter name as a cif_title.
 
 Rules:
-- Only include CIF titles that genuinely match the described symptoms
-- If one CIF is clearly dominant, list only that one with 100%
-- If 2 or 3 are plausible, distribute the probability accordingly
-- Be honest: do not force 3 candidates if only 1 or 2 are relevant
-- Use ONLY titles from the list below — do not invent titles
+- Always consider whether 2 or 3 CIF titles could plausibly match — do not default to 1 if there is genuine ambiguity
+- If the description is precise and one CIF is clearly dominant: return 1 entry at 100%
+- If the description could match 2 CIF titles: return 2 entries, split the probability honestly (e.g. 70/30)
+- If the description is vague and 3 CIF titles are plausible: return 3 entries (e.g. 50/30/20)
+- Probabilities must always sum to 100
+- Be honest about uncertainty — it is better to show 2 candidates than to force a single wrong answer
+- Use ONLY the indented "  - " titles as cif_title values — never the [bracket] perimeter names
 
 Known fault types:
 {arbre_complet}
@@ -138,10 +144,10 @@ Known fault types:
 Conversation:
 {historique}
 
-Reply ONLY with a JSON array:
+Reply ONLY with a JSON array (1 to 3 items):
 [
-  {{"perimeter": "exact perimeter name", "cif_title": "exact CIF title", "probabilite": 75}},
-  {{"perimeter": "exact perimeter name", "cif_title": "exact CIF title", "probabilite": 25}}
+  {{"perimeter": "exact perimeter name from [brackets]", "cif_title": "exact indented title after  - ", "probabilite": 70}},
+  {{"perimeter": "exact perimeter name from [brackets]", "cif_title": "exact indented title after  - ", "probabilite": 30}}
 ]
 """
 
@@ -397,7 +403,22 @@ class AgentDiagnostic:
             )
             contenu = response.choices[0].message.content.strip()
             contenu = contenu.replace("```json", "").replace("```", "").strip()
-            return json.loads(contenu)
+            ranking = json.loads(contenu)
+
+            # Validate: filter out entries where cif_title is actually a perimeter name
+            perimeter_names = {d["nom"].lower() for d in self.arbre.data["domaines"]}
+            valid = [
+                item for item in ranking
+                if item.get("cif_title", "").lower() not in perimeter_names
+                and item.get("cif_title", "") != ""
+            ]
+
+            # If validation removed everything, fall back
+            if not valid:
+                raise ValueError("All ranking entries were invalid (perimeter names used as CIF titles)")
+
+            return valid
+
         except Exception as e:
             print(f"[LLM RANKING ERROR] {e}")
             # Fallback: return the fiche identified during the conversation
